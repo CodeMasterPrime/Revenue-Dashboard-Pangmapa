@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Dashboard</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body {
+  margin:0;
+  font-family: 'Segoe UI', sans-serif;
+  background: #0f172a;
+  color: white;
+}
+
+.header {
+  padding:20px;
+  font-size:24px;
+  font-weight:bold;
+}
+
+.controls {
+  padding: 0 20px;
+}
+
+select {
+  padding:8px;
+  margin:10px;
+  border-radius:8px;
+}
+
+.grid {
+  display:grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap:20px;
+  padding:20px;
+}
+
+.card {
+  background: linear-gradient(135deg,#1e293b,#334155);
+  padding:20px;
+  border-radius:16px;
+}
+
+.card h3 { margin:0; font-size:14px; opacity:0.7;}
+.card h1 { margin:10px 0 0; }
+
+.charts {
+  display:grid;
+  grid-template-columns: 2fr 2fr 1fr;
+  gap:20px;
+  padding:20px;
+}
+
+.chart-box {
+  background: linear-gradient(135deg,#1e293b,#334155);
+  border-radius:16px;
+  padding:15px;
+  height:350px;
+}
+
+canvas {
+  height:100% !important;
+}
+
+.table {
+  padding:20px;
+}
+
+table {
+  width:100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding:10px;
+  border-bottom:1px solid #334155;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="header">📊 Dashboard รายได้</div>
+
+<div class="controls">
+  เดือน: <select id="month"></select>
+  เกษตรกร: <select id="farmer"></select>
+</div>
+
+<div class="grid">
+  <div class="card"><h3>ค่าใช้จ่าย</h3><h1 id="cost">0</h1></div>
+  <div class="card"><h3>ยอดจ่าย</h3><h1 id="pay">0</h1></div>
+  <div class="card"><h3>กำไร/ขาดทุน</h3><h1 id="profit">0</h1></div>
+</div>
+
+<div class="charts">
+  <div class="chart-box"><canvas id="bar"></canvas></div>
+  <div class="chart-box"><canvas id="line"></canvas></div>
+  <div class="chart-box"><canvas id="pie"></canvas></div>
+</div>
+
+<div class="table">
+  <table>
+    <thead>
+      <tr>
+        <th>วันเวลา</th>
+        <th>ชื่อเกษตรกร</th>
+        <th>รายการ</th>
+        <th>จำนวนเงิน (บาท)</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+</div>
+
+<script>
+const url = "https://opensheet.elk.sh/1FK3QqqEmfBEIN_sgXR-QjlUO_Y18S97uVDZ0Nz5xd5Q/1";
+
+let data = [];
+
+fetch(url).then(r=>r.json()).then(d=>{
+  data = d;
+  init();
+});
+
+function getMonth(d){
+  if(!d) return "";
+  let p = d.split("/");
+  return p[1]+"/"+p[2];
+}
+
+function init(){
+  const months = [...new Set(data.map(d=>getMonth(d["วันเวลา"])))];
+  const farmers = [...new Set(data.map(d=>d["ชื่อเกษตรกร"]))];
+
+  months.forEach(m=>{
+    month.innerHTML += `<option>${m}</option>`;
+  });
+
+  farmer.innerHTML = `<option value="">ทั้งหมด</option>`;
+  farmers.forEach(f=>{
+    farmer.innerHTML += `<option>${f}</option>`;
+  });
+
+  month.onchange = update;
+  farmer.onchange = update;
+
+  update();
+}
+
+let barChart, pieChart, lineChart;
+
+function update(){
+  let m = month.value;
+  let f = farmer.value;
+
+  let filtered = data.filter(d=>{
+    return getMonth(d["วันเวลา"])===m &&
+           (f=="" || d["ชื่อเกษตรกร"]===f);
+  });
+
+  let cost=0, pay=0;
+
+  filtered.forEach(d=>{
+    cost += Number(d["ค่าใช้จ่าย"]||0);
+    pay += Number(d["ยอดเงินที่ต้องจ่าย"]||0);
+  });
+
+  let profit = pay - cost;
+
+  document.getElementById("cost").innerText = cost.toLocaleString();
+  document.getElementById("pay").innerText = pay.toLocaleString();
+  document.getElementById("profit").innerText = profit.toLocaleString();
+
+  drawChart(filtered, cost, pay);
+  drawTable(filtered);
+}
+
+function groupNetByDate(rows){
+  let map = {};
+
+  rows.forEach(r=>{
+    let date = r["วันเวลา"];
+
+    let cost = Number(r["ค่าใช้จ่าย"]||0);
+    let pay = Number(r["ยอดเงินที่ต้องจ่าย"]||0);
+
+    let net = pay - cost;
+
+    if(!map[date]){
+      map[date] = 0;
+    }
+
+    map[date] += net;
+  });
+
+  return map;
+}
+
+function drawChart(rows, cost, pay){
+  if(barChart) barChart.destroy();
+  if(pieChart) pieChart.destroy();
+  if(lineChart) lineChart.destroy();
+
+  const grouped = groupNetByDate(rows);
+
+  const labels = Object.keys(grouped).sort((a,b)=>{
+    let pa = a.split("/").reverse().join("-");
+    let pb = b.split("/").reverse().join("-");
+    return new Date(pa) - new Date(pb);
+  });
+
+  const netData = labels.map(d => grouped[d]);
+
+  // 🔵 BAR
+  barChart = new Chart(document.getElementById("bar"),{
+    type:'bar',
+    data:{
+      labels: labels,
+      datasets:[{
+        label:"กำไร/ขาดทุนรายวัน",
+        data: netData,
+        backgroundColor: netData.map(v => v >= 0 ? '#22c55e' : '#ef4444')
+      }]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{ labels:{ color:'white' } }
+      },
+      scales:{
+        x:{ ticks:{ color:'white' } },
+        y:{ ticks:{ color:'white' }, beginAtZero:true }
+      }
+    }
+  });
+
+  // 📈 LINE
+  lineChart = new Chart(document.getElementById("line"),{
+    type:'line',
+    data:{
+      labels: labels,
+      datasets:[{
+        label:"แนวโน้มกำไร",
+        data: netData,
+        borderColor:'#38bdf8',
+        borderWidth:2,
+        fill:false,
+        tension:0.3,
+        pointBackgroundColor:'#38bdf8'
+      }]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{ labels:{ color:'white' } }
+      },
+      scales:{
+        x:{ ticks:{ color:'white' } },
+        y:{ ticks:{ color:'white' }, beginAtZero:true }
+      }
+    }
+  });
+
+  // 🟡 PIE
+  pieChart = new Chart(document.getElementById("pie"),{
+    type:'doughnut',
+    data:{
+      labels:["ค่าใช้จ่าย","ยอดจ่าย"],
+      datasets:[{data:[cost,pay]}]
+    },
+    options:{
+      maintainAspectRatio:false
+    }
+  });
+}
+
+function drawTable(rows){
+  tableBody.innerHTML = "";
+
+  rows.forEach(r=>{
+    let cost = Number(r["ค่าใช้จ่าย"]||0);
+    let pay = Number(r["ยอดเงินที่ต้องจ่าย"]||0);
+
+    let net = pay - cost;
+
+    tableBody.innerHTML += `
+    <tr>
+      <td>${r["วันเวลา"]}</td>
+      <td>${r["ชื่อเกษตรกร"]}</td>
+      <td>${r["รายการ"]}</td>
+      <td style="text-align:right; color:${net>=0?'#22c55e':'#ef4444'}">
+        ${net.toLocaleString()}
+      </td>
+    </tr>`;
+  });
+}
+</script>
+
+</body>
+</html>
